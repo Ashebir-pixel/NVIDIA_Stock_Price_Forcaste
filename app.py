@@ -54,17 +54,14 @@ model_fit = model.fit()
 # 4. Generating Future Dates
 last_date = df['date'].max()
 future_dates = [last_date + timedelta(days=i) for i in range(1, days_to_forecast + 1)]
-
 # 5. Predicting
 # FIX 3: Predict using the 'days_to_forecast' slider value, not a hardcoded '10'
 future_preds = model_fit.forecast(steps=days_to_forecast)
-
 # FIX 4: Maintain consistent column casing (lowercase) for the forecast dataframe
 forecast_df = pd.DataFrame({
     'date': future_dates, 
     'close': future_preds.values 
 })
-
 # 6. Visualizing (Combine Historical + Forecast)
 df['type'] = 'Historical'
 forecast_df['type'] = 'Forecast'
