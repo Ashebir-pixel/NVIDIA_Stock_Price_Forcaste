@@ -8,6 +8,7 @@ import urllib.parse
 # Page configuration
 st.set_page_config(page_title="NVIDIA Stock Forecast", layout="wide")
 st.title("📈 Stock Price Forecast Dashboard")
+
 # 1. Database Connection
 # Recommendation: In production, use st.secrets for credentials
 db_pass = st.secrets ["db_password"]
@@ -31,29 +32,38 @@ def load_data():
         return pd.DataFrame()
 
 df = load_data()
-
-if df.empty:
-    st.warning("No data found. Please check your database connection.")
-    st.stop()
-
 # 2. Sidebar for User Input
 st.sidebar.header("Forecast Settings")
+if st.sidebar.button("Refresh Data"):
+    st.cache_data.clear()
 days_to_forecast = st.sidebar.slider("Days to Predict", 1, 365, 30)
+# NEW: ARIMA parameters
+p = st.sidebar.slider("AR (p)", 0, 5, 1)
+d = st.sidebar.slider("Differencing (d)", 0, 2, 1)
+q = st.sidebar.slider("MA (q)", 0, 5, 1)
 
+# NEW: Date filter
+start_date = st.sidebar.date_input("Start Date", df['date'].min())
+end_date = st.sidebar.date_input("End Date", df['date'].max())
 # 3. Training the Model
 # FIX 2: Use recent data (last 100 days) to prevent "old trend" bias
 # This ensures a 2027 prediction isn't heavily skewed by 2023 data
 recent_df = df.tail(100).copy()
 y = recent_df['close']
 # ARIMA Model setup
-model = ARIMA(y, order=(1,1,1))
+recent_df = df.tail(100).copy()
+y = recent_df['close']
+
+model = ARIMA(y, order=(p, d, q))
 model_fit = model.fit()
 # 4. Generating Future Dates
 last_date = df['date'].max()
-future_dates = [last_date + timedelta(days=i) for i in range(1, days_to_forecast + 1)]
+future_dates = pd.bdate_range(start=last_date, periods=days_to_forecast+1)[1:]
 # 5. Predicting
 # FIX 3: Predict using the 'days_to_forecast' slider value, not a hardcoded '10'
-future_preds = model_fit.forecast(steps=days_to_forecast)
+forecast = model_fit.get_forecast(steps=days_to_forecast)
+future_preds = forecast.predicted_mean
+conf_int = forecast.conf_int()
 # FIX 4: Maintain consistent column casing (lowercase) for the forecast dataframe
 forecast_df = pd.DataFrame({
     'date': future_dates, 
@@ -69,7 +79,42 @@ st.subheader(f"NVIDIA Price Projection for the next {days_to_forecast} days")
 
 # FIX 6: Use standardized lowercase names for charting
 chart_data = combined_df.set_index('date')['close']
-st.line_chart(chart_data)
+csv = combined_df.to_csv(index=False)
+
+st.download_button(
+    "Download Forecast Data",
+    csv,
+    "forecast.csv",
+    "text/csv"
+)
+import plotly.graph_objects as go
+
+fig = go.Figure()
+
+fig.add_trace(go.Scatter(x=df['date'], y=df['close'], name='Historical'))
+fig.add_trace(go.Scatter(x=future_dates, y=future_preds, name='Forecast'))
+
+fig.add_trace(go.Scatter(
+    x=future_dates,
+    y=conf_int.iloc[:, 0],
+    line=dict(width=0),
+    showlegend=False
+))
+
+fig.add_trace(go.Scatter(
+    x=future_dates,
+    y=conf_int.iloc[:, 1],
+    fill='tonexty',
+    line=dict(width=0),
+    name='Confidence Interval'
+))
+
+st.plotly_chart(fig, use_container_width=True)
+st.subheader("Model Summary")
+st.text(model_fit.summary())
+
+st.subheader("Residuals")
+st.line_chart(model_fit.resid)
 
 # 7. Economic Insight
 st.info(f"Target Forecast: Reach ${future_preds.values[-1]:.2f} by {future_dates[-1].date()}")
