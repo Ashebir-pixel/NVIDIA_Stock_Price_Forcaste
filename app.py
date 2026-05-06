@@ -8,7 +8,6 @@ import urllib.parse
 # Page configuration
 st.set_page_config(page_title="NVIDIA Stock Forecast", layout="wide")
 st.title("📈 Stock Price Forecast Dashboard")
-
 # 1. Database Connection
 # Recommendation: In production, use st.secrets for credentials
 db_pass = st.secrets ["db_password"]
