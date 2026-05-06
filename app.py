@@ -46,11 +46,9 @@ days_to_forecast = st.sidebar.slider("Days to Predict", 1, 365, 30)
 # This ensures a 2027 prediction isn't heavily skewed by 2023 data
 recent_df = df.tail(100).copy()
 y = recent_df['close']
-
 # ARIMA Model setup
 model = ARIMA(y, order=(1,1,1))
 model_fit = model.fit()
-
 # 4. Generating Future Dates
 last_date = df['date'].max()
 future_dates = [last_date + timedelta(days=i) for i in range(1, days_to_forecast + 1)]
