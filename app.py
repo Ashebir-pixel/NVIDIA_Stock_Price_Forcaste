@@ -1,124 +1,144 @@
 import pandas as pd
-import streamlit as st
 import numpy as np
-from sqlalchemy import create_engine
+import streamlit as st
+import plotly.graph_objects as go
 from statsmodels.tsa.arima.model import ARIMA
-from datetime import timedelta
+from sqlalchemy import create_engine
 import urllib.parse
-# Page configuration
-st.set_page_config(page_title="NVIDIA Stock Forecast", layout="wide")
-st.title("📈 Stock Price Forecast Dashboard")
+from datetime import datetime, timedelta
 
-# 1. Database Connection
-# Recommendation: In production, use st.secrets for credentials
-db_pass = st.secrets ["db_password"]
-safe_pass = urllib.parse.quote_plus(db_pass)
-engine = create_engine(f"mysql+pymysql://root:{safe_pass}@localhost/wegagen_db")
+# --- 1. SETTINGS & STYLING ---
+st.set_page_config(page_title="NVIDIA Prediction Engine", layout="wide", page_icon="📈")
 
+# Dark Theme Styling
+st.markdown("""
+<style>
+    .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; border: 1px solid #3e4150; }
+    .reportview-container { background: #0e1117; }
+</style>
+""", unsafe_allow_html=True)
+
+# --- 2. ROBUST DATA LOADER ---
 @st.cache_data
 def load_data():
+    """Fetches data from DB or local CSV with fallback to simulation"""
+    df = None
     try:
-        # Load from DB
-        query = "SELECT * FROM nvidia_stocks"
-        df = pd.read_sql(query, engine)
-        
-        # FIX 1: Standardize all columns to lowercase early
-        df.columns = [c.lower() for c in df.columns] 
-        df['date'] = pd.to_datetime(df['date'])
-        return df.sort_values('date')
-    except Exception as e:
-        st.error(f"Error connecting to database: {e}")
-        # Fallback logic for testing without DB
-        return pd.DataFrame()
+        # DB Connection Attempt
+        db_pass = st.secrets.get("db_password")
+        if db_pass:
+            safe_pass = urllib.parse.quote_plus(db_pass)
+            engine = create_engine(f"mysql+pymysql://root:{safe_pass}@127.0.0.1/stock_data")
+            df = pd.read_sql("SELECT * FROM nvidia_historical", engine)
+            st.sidebar.success("📡 Database: Online")
+        else:
+            raise ValueError("No Credentials")
+    except:
+        try:
+            # CSV Fallback
+            df = pd.read_csv('nvidia_stock_data_1999_2026.csv')
+            st.sidebar.info("📂 Using Local CSV File")
+        except:
+            # Emergency Simulation (Prevents code crash)
+            dates = pd.date_range(end='2026-05-08', periods=1000)
+            df = pd.DataFrame({
+                'Date': dates,
+                'Close': 100 + np.cumsum(np.random.normal(0.5, 2.5, 1000))
+            })
+            st.sidebar.warning("⚠️ Simulation Mode Active")
 
+    # FIX: Standardize Columns (Lowercase + Strip)
+    df.columns = df.columns.str.lower().str.strip()
+    
+    # FIX: Date Handling
+    date_col = next((c for c in df.columns if 'date' in c), df.columns[0])
+    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+    df = df.dropna(subset=[date_col]).sort_values(date_col)
+    
+    # FIX: Price Identification
+    p_col = next((c for c in df.columns if 'close' in c or 'price' in c), 'close')
+    return df.rename(columns={date_col: 'Date', p_col: 'Close'})
+
+# --- 3. CORE LOGIC ---
 df = load_data()
-# 2. Sidebar for User Input
+
+# Sidebar: Forecast Controls
 st.sidebar.header("Forecast Settings")
-if st.sidebar.button("Refresh Data"):
-    st.cache_data.clear()
-days_to_forecast = st.sidebar.slider("Days to Predict", 1, 365, 30)
-# NEW: ARIMA parameters
-p = st.sidebar.slider("AR (p)", 0, 5, 1)
-d = st.sidebar.slider("Differencing (d)", 0, 2, 1)
-q = st.sidebar.slider("MA (q)", 0, 5, 1)
+scenario = st.sidebar.selectbox("Market Scenario", ["Neutral", "Bullish", "Bearish"])
+days_to_predict = st.sidebar.slider("Days to Predict", 7, 365, 30)
 
-# NEW: Date filter
-start_date = st.sidebar.date_input("Start Date", df['date'].min())
-end_date = st.sidebar.date_input("End Date", df['date'].max())
-# 3. Training the Model
-# FIX 2: Use recent data (last 100 days) to prevent "old trend" bias
-# This ensures a 2027 prediction isn't heavily skewed by 2023 data
-recent_df = df.tail(100).copy()
-y = recent_df['close']
-# ARIMA Model setup
-recent_df = df.tail(100).copy()
-y = recent_df['close']
+with st.sidebar.expander("Advanced ARIMA Parameters"):
+    p = st.slider("AR (p)", 0, 5, 1)
+    d = st.slider("I (d)", 0, 2, 1)
+    q = st.slider("MA (q)", 0, 5, 1)
 
-model = ARIMA(y, order=(p, d, q))
-model_fit = model.fit()
-# 4. Generating Future Dates
-last_date = df['date'].max()
-future_dates = pd.bdate_range(start=last_date, periods=days_to_forecast+1)[1:]
-# 5. Predicting
-# FIX 3: Predict using the 'days_to_forecast' slider value, not a hardcoded '10'
-forecast = model_fit.get_forecast(steps=days_to_forecast)
-future_preds = forecast.predicted_mean
-conf_int = forecast.conf_int()
-# FIX 4: Maintain consistent column casing (lowercase) for the forecast dataframe
-forecast_df = pd.DataFrame({
-    'date': future_dates, 
-    'close': future_preds.values 
-})
-# 6. Visualizing (Combine Historical + Forecast)
-df['type'] = 'Historical'
-forecast_df['type'] = 'Forecast'
+# Feature 1: Moving Averages
+df['SMA50'] = df['Close'].rolling(window=50).mean()
+df['SMA200'] = df['Close'].rolling(window=200).mean()
 
-# FIX 5: Ensure column names match perfectly for concatenation
-combined_df = pd.concat([df[['date', 'close', 'type']], forecast_df])
-st.subheader(f"NVIDIA Price Projection for the next {days_to_forecast} days")
+# ARIMA Modeling
+training_df = df.tail(500) # Use last 500 days for speed/stability
+y = training_df['Close'].values
 
-# FIX 6: Use standardized lowercase names for charting
-chart_data = combined_df.set_index('date')['close']
-csv = combined_df.to_csv(index=False)
+try:
+    # Model Fit
+    model = ARIMA(y, order=(p, d, q))
+    model_fit = model.fit()
+    
+    # Adjustment for Scenarios (Drift)
+    drift_map = {"Neutral": 0, "Bullish": 0.05, "Bearish": -0.05}
+    forecast_res = model_fit.get_forecast(steps=days_to_predict)
+    # Apply scenario drift to predicted mean
+    future_preds = forecast_res.predicted_mean * (1 + drift_map[scenario])
+    conf_int = forecast_res.conf_int(alpha=0.05)
+    
+    # Generate Future Dates (Business Days only)
+    last_date = df['Date'].max()
+    future_dates = pd.bdate_range(start=last_date + timedelta(days=1), periods=days_to_predict)
 
-st.download_button(
-    "Download Forecast Data",
-    csv,
-    "forecast.csv",
-    "text/csv"
-)
-import plotly.graph_objects as go
+    # --- 4. UI SECTIONS ---
+    st.title("📈 NVIDIA Forecast Console")
+    
+    # Metrics
+    c1, c2, c3, c4 = st.columns(4)
+    current_px = df['Close'].iloc[-1]
+    target_px = future_preds[-1]
+    roi = ((target_px - current_px) / current_px) * 100
+    
+    c1.metric("Current Price", f"${current_px:.2f}")
+    c2.metric("Target Projection", f"${target_px:.2f}", f"{roi:.1f}%")
+    c3.metric("SMA 200", f"${df['SMA200'].iloc[-1]:.2f}")
+    c4.metric("Status", scenario, delta_color="normal")
 
-fig = go.Figure()
+    # Charting with Plotly
+    fig = go.Figure()
+    
+    # Historical Trace (Last 200 days)
+    hist_view = df.tail(200)
+    fig.add_trace(go.Scatter(x=hist_view['Date'], y=hist_view['Close'], name='Historical', line=dict(color='#10b981')))
+    
+    # SMA Overlays
+    fig.add_trace(go.Scatter(x=hist_view['Date'], y=hist_view['SMA200'], name='SMA 200', line=dict(color='purple', width=1, dash='dot')))
+    
+    # Forecast Trace
+    fig.add_trace(go.Scatter(x=future_dates, y=future_preds, name='Forecast', line=dict(color='#f59e0b', width=3, dash='dash')))
+    
+    # Confidence Intervals (Shaded)
+    fig.add_trace(go.Scatter(
+        x=future_dates.tolist() + future_dates.tolist()[::-1],
+        y=conf_int[:, 1].tolist() + conf_int[:, 0].tolist()[::-1],
+        fill='toself',
+        fillcolor='rgba(245, 158, 11, 0.1)',
+        line=dict(color='rgba(255,255,255,0)'),
+        hoverinfo="skip",
+        name='Confidence Interval'
+    ))
 
-fig.add_trace(go.Scatter(x=df['date'], y=df['close'], name='Historical'))
-fig.add_trace(go.Scatter(x=future_dates, y=future_preds, name='Forecast'))
+    fig.update_layout(template="plotly_dark", height=600, margin=dict(l=0, r=0, t=20, b=0))
+    st.plotly_chart(fig, use_container_width=True)
 
-fig.add_trace(go.Scatter(
-    x=future_dates,
-    y=conf_int.iloc[:, 0],
-    line=dict(width=0),
-    showlegend=False
-))
-
-fig.add_trace(go.Scatter(
-    x=future_dates,
-    y=conf_int.iloc[:, 1],
-    fill='tonexty',
-    line=dict(width=0),
-    name='Confidence Interval'
-))
-
-st.plotly_chart(fig, use_container_width=True)
-st.subheader("Model Summary")
-st.text(model_fit.summary())
-
-st.subheader("Residuals")
-st.line_chart(model_fit.resid)
-
-# 7. Economic Insight
-st.info(f"Target Forecast: Reach ${future_preds.values[-1]:.2f} by {future_dates[-1].date()}")
-
-# Optional: Show Data Summary
-with st.expander("View Data Summary"):
-    st.write(combined_df.tail(days_to_forecast + 5))
+    # Economic Insight
+    st.info(f"Analysis: The model predicts a {scenario} trend reaching ${target_px:.2f} by {future_dates[-1].date()}.")
+    
+except Exception as e:
+    st.error(f"Prediction Error: {e}")
