@@ -114,7 +114,15 @@ try:
 
     last_date = df["Date"].max()
     future_dates = pd.bdate_range(start=last_date + timedelta(days=1), periods=days_to_predict)
-
+    # Create a DataFrame for the exported data
+    forecast_export = pd.DataFrame({
+        "Date": future_dates,
+        "Predicted_Close": future_preds,
+        "Lower_95_Confidence": conf_int[:, 0],
+        "Upper_95_Confidence": conf_int[:, 1],
+        "Scenario": scenario,
+        "ARIMA_Order": f"({p},{d},{q})"
+    })
     # --- 4. UI SECTIONS ---
     st.title("📈 NVIDIA AI PREDICTION ENGINE")
     c1, c2, c3, c4, c5 = st.columns(5)
