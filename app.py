@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import streamlit as st
+import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from statsmodels.tsa.arima.model import ARIMA
@@ -113,8 +114,7 @@ try:
     mape = np.mean(np.abs((test_bt.values - bt_pred) / test_bt.values)) * 100
 
     # --- 4. UI SECTIONS ---
-    st.title("📈 NVIDIA Forecast Console")
-
+    st.title("📈 NVIDIA STOCK PRICE FORCASTE")
     c1, c2, c3, c4, c5 = st.columns(5)
     current_px = df["Close"].iloc[-1]
     target_px = future_preds[-1]
