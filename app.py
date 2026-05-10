@@ -28,17 +28,30 @@ def load_data():
     # --- STRATEGY 1: API CALL (PRIMARY) ---
     try:
         # Fetching historical data up to the current date in 2026
+        # Fetching data directly from the API
+        # We use a date range that includes today's date in 2026
         df = yf.download(ticker_symbol, start="1999-01-01", end="2026-05-10")
-        if not df.empty:
-            df = df.reset_index()
-            st.sidebar.success("🚀 API: Live Data Connected")
-            # Flatten columns if they are MultiIndex (common in newer yfinance versions)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            return df.rename(columns={"Date": "Date", "Close": "Close"})
+        if df.empty:
+            raise ValueError("API returned empty DataFrame")
+        # IMPORTANT: yfinance 2026 returns a Multi-Index header. 
+        # We must flatten it so the rest of your code (ARIMA, etc.) works.
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        df = df.reset_index()
+        st.sidebar.success("✅ Connected to Live Yahoo Finance API")
+        return df.rename(columns={"Date": "Date", "Close": "Close"})
+    
     except Exception as e:
-        st.sidebar.error(f"API Failed: {e}")
-
+        st.sidebar.warning(f"⚠️ API Connection Failed: {e}. Falling back to CSV.")
+        # Only if the API fails, it goes to the CSV
+        df = pd.read_csv("nvidia_stock_data_1999_2026.csv")
+        return df
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ API Connection Failed: {e}. Falling back to CSV.")
+        # Only if the API fails, it goes to the CSV
+        df = pd.read_csv("nvidia_stock_data_1999_2026.csv")
+        return df
     # --- STRATEGY 2: DATABASE FALLBACK ---
     try:
         db_pass = st.secrets.get("db_password")
