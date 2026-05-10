@@ -20,38 +20,26 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 2. ROBUST DATA LOADER (UPDATED WITH API) ---
-@st.cache_data(ttl=3600) # Cache for 1 hour to keep data fresh
+@st.cache_data(ttl=3600)
 def load_data():
-    """Fetches data from API (Primary), DB, or CSV fallbacks"""
-    ticker_symbol = "NVDA"
-    
+    ticker_symbol = "NVDA"    
     # --- STRATEGY 1: API CALL (PRIMARY) ---
     try:
-        # Fetching historical data up to the current date in 2026
-        # Fetching data directly from the API
-        # We use a date range that includes today's date in 2026
-        df = yf.download(ticker_symbol, start="1999-01-01", end="2026-05-10")
+        df = yf.download(ticker_symbol, start="1999-01-01", end="2026-05-10", auto_adjust=True)
         if df.empty:
-            raise ValueError("API returned empty DataFrame")
-        # IMPORTANT: yfinance 2026 returns a Multi-Index header. 
-        # We must flatten it so the rest of your code (ARIMA, etc.) works.
+            raise ValueError("Yahoo returned no data. Check Ticker or Connection.")
+        
+        # FIX THE MULTI-INDEX (The KeyError Killer)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-            
+        
         df = df.reset_index()
         st.sidebar.success("✅ Connected to Live Yahoo Finance API")
         return df.rename(columns={"Date": "Date", "Close": "Close"})
     
     except Exception as e:
-        st.sidebar.warning(f"⚠️ API Connection Failed: {e}. Falling back to CSV.")
-        # Only if the API fails, it goes to the CSV
-        df = pd.read_csv("nvidia_stock_data_1999_2026.csv")
-        return df
-    except Exception as e:
-        st.sidebar.warning(f"⚠️ API Connection Failed: {e}. Falling back to CSV.")
-        # Only if the API fails, it goes to the CSV
-        df = pd.read_csv("nvidia_stock_data_1999_2026.csv")
-        return df
+        st.sidebar.warning(f"⚠️ API Connection Failed: {e}. Falling back to alternatives.")
+    
     # --- STRATEGY 2: DATABASE FALLBACK ---
     try:
         db_pass = st.secrets.get("db_password")
@@ -60,28 +48,38 @@ def load_data():
             engine = create_engine(f"mysql+pymysql://root:{safe_pass}@127.0.0.1/stock_data")
             df = pd.read_sql("SELECT * FROM nvidia_historical", engine)
             st.sidebar.success("📡 Database: Online")
+            df.columns = df.columns.str.lower().str.strip()
+            date_col = next((c for c in df.columns if "date" in c), df.columns[0])
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+            df = df.dropna(subset=[date_col]).sort_values(date_col)
+            p_col = next((c for c in df.columns if "close" in c or "price" in c), "close")
+            return df.rename(columns={date_col: "Date", p_col: "Close"})
         else:
             raise ValueError("No Credentials")
     except Exception:
-        # --- STRATEGY 3: LOCAL CSV FALLBACK ---
-        try:
-            df = pd.read_csv("nvidia_stock_data_1999_2026.csv")
-            st.sidebar.info("📂 Using Local CSV File")
-        except Exception:
-            # --- STRATEGY 4: SIMULATION ---
-            dates = pd.date_range(end="2026-05-08", periods=1000)
-            df = pd.DataFrame({
-                "Date": dates,
-                "Close": 100 + np.cumsum(np.random.normal(0.5, 2.5, 1000)),
-            })
-            st.sidebar.warning("⚠️ Simulation Mode Active")
-
-    df.columns = df.columns.str.lower().str.strip()
-    date_col = next((c for c in df.columns if "date" in c), df.columns[0])
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    df = df.dropna(subset=[date_col]).sort_values(date_col)
-    p_col = next((c for c in df.columns if "close" in c or "price" in c), "close")
-    return df.rename(columns={date_col: "Date", p_col: "Close"})
+        pass
+    
+    # --- STRATEGY 3: LOCAL CSV FALLBACK ---
+    try:
+        df = pd.read_csv("nvidia_stock_data_1999_2026.csv")
+        st.sidebar.info("📂 Using Local CSV File")
+        df.columns = df.columns.str.lower().str.strip()
+        date_col = next((c for c in df.columns if "date" in c), df.columns[0])
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        df = df.dropna(subset=[date_col]).sort_values(date_col)
+        p_col = next((c for c in df.columns if "close" in c or "price" in c), "close")
+        return df.rename(columns={date_col: "Date", p_col: "Close"})
+    except Exception:
+        pass
+    
+    # --- STRATEGY 4: SIMULATION ---
+    dates = pd.date_range(end="2026-05-08", periods=1000)
+    df = pd.DataFrame({
+        "Date": dates,
+        "Close": 100 + np.cumsum(np.random.normal(0.5, 2.5, 1000)),
+    })
+    st.sidebar.warning("⚠️ Simulation Mode Active")
+    return df
 
 def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
