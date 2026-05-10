@@ -117,7 +117,6 @@ try:
 
     # --- 4. UI SECTIONS ---
     st.title("📈 NVIDIA AI PREDICTION ENGINE")
-    
     c1, c2, c3, c4, c5 = st.columns(5)
     current_px = float(df["Close"].iloc[-1])
     target_px = float(future_preds[-1])
